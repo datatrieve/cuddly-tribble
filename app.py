@@ -1,15 +1,12 @@
 import os
 
 # ✅ MUST be set before importing transformers or torch
-# Leapcell's /app directory is read-only — only /tmp is writable
-# This tells HuggingFace to cache model files in /tmp instead
 os.environ["HF_HOME"] = "/tmp/hf_cache"
 os.environ["TRANSFORMERS_CACHE"] = "/tmp/hf_cache"
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
-import torch
 
 app = FastAPI(title="LFM2-350M Chat API")
 
@@ -29,6 +26,8 @@ def load_model():
     if model is not None:
         return  # Already loaded, skip
 
+    # Import torch here so we get a clear error if it's missing
+    import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     print(f"⏳ Loading model: {MODEL_ID} into /tmp/hf_cache ...")
@@ -45,7 +44,21 @@ def load_model():
 @app.get("/health")
 def health():
     """Instant health check — Leapcell pings this on startup."""
-    return {"status": "ok", "model_loaded": model is not None}
+    # Also verify torch is importable
+    try:
+        import torch
+        torch_ok = True
+        torch_version = torch.__version__
+    except ImportError:
+        torch_ok = False
+        torch_version = "NOT FOUND"
+
+    return {
+        "status": "ok",
+        "model_loaded": model is not None,
+        "torch_available": torch_ok,
+        "torch_version": torch_version,
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -57,6 +70,7 @@ def home():
         <p>Send a POST to <code>/chat</code> with JSON:</p>
         <pre style="background:#fff;padding:12px;border-radius:8px">{"message": "Hello!"}</pre>
         <p><b>⚠️ First request:</b> slow (~60–120s) — model is downloading + loading into RAM.</p>
+        <p>Check <a href="/health">/health</a> to verify torch is installed.</p>
         <p><a href="/docs">📖 Swagger API Docs →</a></p>
     </body>
     </html>
@@ -79,6 +93,7 @@ def chat(body: ChatRequest):
         return JSONResponse({"error": f"Model failed to load: {str(e)}"}, status_code=500)
 
     try:
+        import torch
         input_ids = tokenizer.apply_chat_template(
             [{"role": "user", "content": user_message}],
             add_generation_prompt=True,
